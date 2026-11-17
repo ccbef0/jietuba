@@ -36,11 +36,12 @@ QRect desktop_geometry() {
     return bounds;
 }
 
-// Light cards on a dark theme and dark cards on a light one, so the translation stays legible
-// over whatever it covers.
+// Light cards on a dark theme and dark cards on a light one. Fully opaque: the point of the
+// card is to hide the line underneath, and even a few percent of transparency lets the black
+// strokes of the original text bleed through as a shadow.
 void card_colors(const QString &theme_mode, QColor &card, QColor &ink) {
     const bool light = theme_mode == "light";
-    card = light ? QColor(250, 250, 250, 238) : QColor(26, 26, 28, 232);
+    card = light ? QColor(250, 250, 250) : QColor(26, 26, 28);
     ink = light ? QColor(24, 24, 26) : QColor(246, 246, 246);
 }
 
@@ -189,14 +190,22 @@ void InPlaceTranslationOverlay::paintEvent(QPaintEvent *) {
         }
         // Shrinking alone cannot fit a translation much longer than its source: the card grows
         // towards the right edge instead, and only text past that is cut with an ellipsis.
-        const double available = qMax(24.0, right_edge - box.left() - 4);
+        const double card_left = box.left() - BOX_SLACK;
+        const double available = qMax(24.0, right_edge - card_left - 4);
         const double needed = metrics.horizontalAdvance(text) + 2 * CARD_PADDING + 2;
-        const double card_width = needed > box.width() ? qMin(needed, available) : box.width();
-        const QRectF target(box.left(), box.top(), card_width, qMax(box.height(), metrics.height() + 4.0));
+        // A few pixels wider than the recognized box on each side: detection boxes tend to stop
+        // at the outermost glyph's stem, so the line's first and final stroke would otherwise
+        // peek past the card.
+        const double covered = box.width() + 2 * BOX_SLACK;
+        const double card_width = needed > covered ? qMin(needed, available) : covered;
+        // Centred on the box instead of hanging from its top, so the descenders of the line
+        // being covered stay inside the card and the card does not eat into the line above.
+        const double card_height = qMax(box.height() + 2 * BOX_SLACK, metrics.height() + 6.0);
+        const QRectF target(card_left, box.center().y() - card_height / 2.0, card_width, card_height);
 
         painter.setPen(Qt::NoPen);
         painter.setBrush(card);
-        painter.drawRoundedRect(target.adjusted(-1, -1, 1, 1), CARD_RADIUS, CARD_RADIUS);
+        painter.drawRoundedRect(target, CARD_RADIUS, CARD_RADIUS);
         painter.setPen(ink);
         painter.setFont(font);
         const QRectF text_rect = target.adjusted(CARD_PADDING, 0, -CARD_PADDING, 0);

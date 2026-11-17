@@ -48,6 +48,9 @@ private:
     static constexpr int MARGIN = 28;
     static constexpr int CARD_PADDING = 4;
     static constexpr int CARD_RADIUS = 5;
+    // How far past the recognized box the card reaches, so no stroke of the original line is
+    // left outside it.
+    static constexpr int BOX_SLACK = 3;
     static constexpr double MIN_PIXEL_SIZE = 7.0;
 
     QVector<InplaceLine> lines_;
