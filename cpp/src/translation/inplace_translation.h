@@ -53,6 +53,9 @@ private:
     QVector<InplaceLine> lines_;
     QString status_;
     QRect region_;
+    // Where the overlay really landed, which is not always the region widened by the margin:
+    // near a screen edge the widened area is clipped and starts earlier than the margin.
+    QPoint origin_;
 };
 
 // Runs the recognition and the translation of a dragged region off the GUI thread and hands

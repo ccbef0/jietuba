@@ -131,6 +131,7 @@ void InPlaceTranslationOverlay::show_over(const QRect &region) {
     QRect area = region.adjusted(-MARGIN, -MARGIN, MARGIN, MARGIN);
     if (!bounds.isNull()) area = area.intersected(bounds);
     if (area.isEmpty()) area = region;
+    origin_ = area.topLeft();
     setGeometry(area);
     show();
     update();
@@ -172,7 +173,7 @@ void InPlaceTranslationOverlay::paintEvent(QPaintEvent *) {
 
     for (const auto &line : lines_) {
         if (line.text.isEmpty() || line.box.isNull()) continue;
-        const QRectF box = line.box.translated(-region_.topLeft());
+        const QRectF box = line.box.translated(-origin_);
         if (box.right() < 0 || box.bottom() < 0 || box.left() > right_edge) continue;
 
         QFont font = base;
