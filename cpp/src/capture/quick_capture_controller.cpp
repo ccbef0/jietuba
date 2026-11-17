@@ -153,8 +153,9 @@ void QuickCaptureController::on_input(const QString &kind, int token, int x, int
         active_ = token;
         active_action_ = *action;
         // A fresh drag means the previous translation has been read: its cards go now, which is
-        // what makes a new selection the way to dismiss them instead of a close button.
-        if (main_app->config_manager->get_translation_inplace()) InplaceTranslation::instance()->dismiss();
+        // what makes a new selection the way to dismiss them instead of a close button. They also
+        // would not survive being captured into this drag's own selection.
+        if (InplaceTranslation::has_instance()) InplaceTranslation::instance()->dismiss();
         if (!overlay) overlay = new QuickCaptureOverlay(main_app->config_manager);
         overlay->show_selection(start_, start_, bounds_);
     } else if (active_ && token == *active_) {

@@ -17,6 +17,7 @@
 #include "text_recognition/text_recognition.h"
 #include "tools/controller.h"
 #include "tools/number.h"
+#include "translation/inplace_translation.h"
 #include "translation/translation_manager.h"
 #include "ui/dialogs.h"
 #include "ui/save_image_dialog.h"
@@ -29,6 +30,7 @@
 #include <QPixmap>
 #include <QRegularExpression>
 #include <QTimer>
+#include <algorithm>
 
 namespace jietuba {
 namespace {
@@ -214,14 +216,22 @@ void ActionTools::handle_screenshot_translate() {
     log_info(T("启动截图翻译模式"), "ScreenshotTranslate");
     const auto base_image = selection_base_image();
     if (base_image.isNull()) return;
-    // The OCR thread works on a pixmap copy.
-    const auto pixmap_copy = QPixmap::fromImage(base_image);
-    log_debug(T("已复制底图用于OCR: {width}x{height}", {{"width", pixmap_copy.width()}, {"height", pixmap_copy.height()}}), "ScreenshotTranslate");
-    // Read before the window closes.
+    // Everything the two translation paths need is read before the window closes, because the
+    // selection rectangle is the scene's and the scene goes with it.
     const auto params = config_manager ? config_manager->get_translation_request_params() : QVariantMap();
+    // The area this capture came from, built the same way the export built the image - the same
+    // truncation of the same rectangle - so a pixel of the picture and a pixel of the screen
+    // mean the same thing and the cards land exactly on the lines they replace.
+    const auto rect = scene->selection_model->rect();
+    const QRect region(int(rect.x()), int(rect.y()), std::max(1, int(rect.width())), std::max(1, int(rect.height())));
     log_debug(T("关闭截图窗口，释放内存"), "ScreenshotTranslate");
     cleanup_and_close();
-    TranslationManager::instance()->translate_from_image(pixmap_copy, params);
+    if (config_manager && config_manager->get_translation_inplace()) {
+        InplaceTranslation::instance()->start(base_image, region, params);
+        return;
+    }
+    // The OCR thread works on a pixmap copy.
+    TranslationManager::instance()->translate_from_image(QPixmap::fromImage(base_image), params);
 }
 
 void ActionTools::handle_text_recognize() {

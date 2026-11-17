@@ -251,6 +251,8 @@ InplaceTranslation *InplaceTranslation::instance() {
     return self_;
 }
 
+bool InplaceTranslation::has_instance() { return self_ != nullptr; }
+
 void InplaceTranslation::cleanup() {
     auto *previous = self_;
     if (!previous) return;

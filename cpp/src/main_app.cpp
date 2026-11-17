@@ -419,6 +419,10 @@ void MainApp::request_screenshot(bool delayed, bool record) {
     }
     // The annotation's drawings are captured; its hit layer and its focus are not.
     if (screen_annotation) screen_annotation->prepare_for_capture();
+    // In-place translation cards stay on top of every window, so they would be captured into the
+    // new screenshot and then cover the very text they translate. A new capture means the last
+    // translation has been read - the same reason a quick-capture drag clears them.
+    if (InplaceTranslation::has_instance()) InplaceTranslation::instance()->dismiss();
     // An open clipboard window is captured like any window. Once the capture takes the focus it hides
     // unless kept open after pasting; kept open, it stays below the capture.
     // One event loop later, so windows just closed have left the screen.

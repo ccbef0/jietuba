@@ -68,6 +68,9 @@ class InplaceTranslation : public QObject {
     Q_OBJECT
 public:
     static InplaceTranslation *instance();
+    // False until a translation has made the instance: callers that only want to clear the cards
+    // must not build an overlay window on the chance that there is nothing to clear.
+    static bool has_instance();
     // Waits for the threads of the request in flight, then closes the overlay.
     static void cleanup();
     // Recognizes the captured image and translates it in place over region.
