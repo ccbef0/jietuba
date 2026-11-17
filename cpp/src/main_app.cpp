@@ -33,6 +33,7 @@
 #include "settings/data_folder.h"
 #include "settings/tool_settings.h"
 #include "text_recognition/recognizer.h"
+#include "translation/inplace_translation.h"
 #include "translation/smart_translation_controller.h"
 #include "translation/translation_manager.h"
 #include "ui/dialogs.h"
@@ -216,6 +217,7 @@ void MainApp::on_about_to_quit() {
     close_input_hub();
     display_watcher_->close();
     try {
+        InplaceTranslation::cleanup();
         TranslationManager::cleanup();
     } catch (const std::exception &e) {
         log_exception(e, T("清理翻译线程"));

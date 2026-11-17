@@ -16,6 +16,7 @@
 #include "stitch/scroll_window.h"
 #include "text_recognition/result_window.h"
 #include "tools/watermark.h"
+#include "translation/inplace_translation.h"
 #include "translation/translation_manager.h"
 #include "ui/quick_capture_overlay.h"
 #include "ui/screenshot_window.h"
@@ -151,6 +152,9 @@ void QuickCaptureController::on_input(const QString &kind, int token, int x, int
         }
         active_ = token;
         active_action_ = *action;
+        // A fresh drag means the previous translation has been read: its cards go now, which is
+        // what makes a new selection the way to dismiss them instead of a close button.
+        if (main_app->config_manager->get_translation_inplace()) InplaceTranslation::instance()->dismiss();
         if (!overlay) overlay = new QuickCaptureOverlay(main_app->config_manager);
         overlay->show_selection(start_, start_, bounds_);
     } else if (active_ && token == *active_) {
@@ -224,7 +228,8 @@ void QuickCaptureController::deliver(const QImage &captured_image, const QRectF 
             if (region.isEmpty()) return;
             open_normal_capture(captured_image, bounds, worker->cursor, region);
         } else if (action == "translate") {
-            TranslationManager::instance()->translate_from_image(QPixmap::fromImage(captured_image), config->get_translation_request_params());
+            if (config->get_translation_inplace()) InplaceTranslation::instance()->start(captured_image, region, config->get_translation_request_params());
+            else TranslationManager::instance()->translate_from_image(QPixmap::fromImage(captured_image), config->get_translation_request_params());
         } else if (action == "ocr") {
             // As the toolbar's text recognition: a result window or a direct copy per settings.
             if (config->get_ocr_copy_directly_enabled()) copy_text_recognition(captured_image);

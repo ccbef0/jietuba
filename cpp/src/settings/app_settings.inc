@@ -282,6 +282,10 @@ SETTING(translation_split_sentences, "app/translation_split_sentences", bool, tr
 SETTING(translation_preserve_formatting, "app/translation_preserve_formatting", bool, true, Import, Gen, Gen)
 // The compact popup closes on a click outside it or on switching to another window.
 SETTING(translation_popup_auto_close, "app/translation_popup_auto_close", bool, false, Import, Gen, Gen)
+// The dragged-region translation writes its result over the text it came from instead of
+// opening a window beside it. The cards are transparent to input and go away on the next click
+// anywhere, so there is no close button to find; Esc clears them too.
+SETTING(translation_inplace, "app/translation_inplace", bool, true, Import, Gen, Gen)
 SETTING(translation_on_top, "app/translation_on_top", bool, true, Internal, Gen, Gen)
 SETTING(speech_voices, "speech/voices", QStringList, {}, Import, Gen, Gen)
 SETTING(speech_rate, "speech/rate", int, 0, Import, Gen, Gen)
