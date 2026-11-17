@@ -44,6 +44,15 @@ void card_colors(const QString &theme_mode, QColor &card, QColor &ink) {
     ink = light ? QColor(24, 24, 26) : QColor(246, 246, 246);
 }
 
+// Qt's text drawing treats a lone '&' as the start of a keyboard mnemonic and eats it, which
+// would drop a character from translations and cut the measured width short. Doubling one asks
+// for a literal ampersand instead; the escaped form is what gets measured, elided and drawn.
+QString escape_mnemonic(const QString &text) {
+    QString escaped = text;
+    escaped.replace(QLatin1Char('&'), QLatin1String("&&"));
+    return escaped;
+}
+
 // The translated text cut back into one entry per source line.
 //
 // Providers are asked to keep the line breaks and the LLM ones do, but a traditional engine
@@ -61,30 +70,31 @@ QStringList align_translation(const QString &translated, const QVector<QString> 
     if (parts.size() == count) return parts;
     if (parts.isEmpty()) return QStringList(count, QString());
     const QString joined = parts.join(' ');
-    const auto units = joined.toUcs4();
     QVector<int> weights;
     weights.reserve(count);
     int total_weight = 0;
     for (const auto &source : sources) {
-        const int weight = qMax(1, int(source.toUcs4().size()));
+        const int weight = qMax(1, int(source.size()));
         weights << weight;
         total_weight += weight;
     }
     QStringList aligned;
     aligned.reserve(count);
-    qsizetype consumed = 0;
+    int consumed = 0;
     for (int i = 0; i < count; ++i) {
-        qsizetype take = i == count - 1 ? units.size() - consumed : qsizetype(std::llround(double(units.size()) * weights[i] / total_weight));
+        int take = i == count - 1 ? int(joined.size()) - consumed : int(std::llround(double(joined.size()) * weights[i] / total_weight));
         // A piece that starts inside a word would cut it in half; step back to the space before
         // it when one is close. Writing systems without spaces have nothing to fix.
-        if (i > 0 && consumed > 0 && consumed < units.size() && units[consumed] != U' ') {
-            qsizetype back = consumed;
-            const qsizetype limit = qMax(qsizetype(0), consumed - 12);
-            while (back > limit && units[back] != U' ') --back;
+        if (i > 0 && consumed > 0 && consumed < joined.size() && joined.at(consumed) != QLatin1Char(' ')) {
+            int back = consumed;
+            const int limit = qMax(0, consumed - 12);
+            while (back > limit && joined.at(back) != QLatin1Char(' ')) --back;
             if (back > limit) consumed = back + 1;
         }
-        take = qBound(qsizetype(0), take, units.size() - consumed);
-        aligned << QString::fromUcs4(units.constData() + consumed, take);
+        take = qBound(0, take, int(joined.size()) - consumed);
+        // Never cut between the two halves of an astral character.
+        if (i + 1 < count && consumed + take < joined.size() && joined.at(consumed + take).isLowSurrogate()) ++take;
+        aligned << joined.mid(consumed, take);
         consumed += take;
     }
     return aligned;
@@ -149,14 +159,15 @@ void InPlaceTranslationOverlay::paintEvent(QPaintEvent *) {
         QFont font = base;
         font.setPixelSize(14);
         QFontMetricsF metrics(font);
-        const double pill_width = qMin(metrics.horizontalAdvance(status_) + 18.0, right_edge - 8);
+        const QString status = escape_mnemonic(status_);
+        const double pill_width = qMin(metrics.horizontalAdvance(status) + 18.0, right_edge - 8);
         const QRectF pill(4, 4, qMax(pill_width, 48.0), metrics.height() + 8);
         painter.setPen(Qt::NoPen);
         painter.setBrush(card);
         painter.drawRoundedRect(pill, CARD_RADIUS, CARD_RADIUS);
         painter.setPen(ink);
         painter.setFont(font);
-        painter.drawText(pill, Qt::AlignCenter | Qt::TextSingleLine | Qt::TextDontShowMnemonic, status_);
+        painter.drawText(pill, Qt::AlignCenter | Qt::TextSingleLine, status);
     }
 
     for (const auto &line : lines_) {
@@ -165,11 +176,12 @@ void InPlaceTranslationOverlay::paintEvent(QPaintEvent *) {
         if (box.right() < 0 || box.bottom() < 0 || box.left() > right_edge) continue;
 
         QFont font = base;
+        const QString text = escape_mnemonic(line.text);
         double size = qBound(MIN_PIXEL_SIZE, box.height() * 0.86, MAX_PIXEL_SIZE);
         font.setPixelSize(int(size));
         QFontMetricsF metrics(font);
         const double inner = box.width() - 2 * CARD_PADDING;
-        while (size > MIN_PIXEL_SIZE && metrics.horizontalAdvance(line.text) > inner) {
+        while (size > MIN_PIXEL_SIZE && metrics.horizontalAdvance(text) > inner) {
             size = qMax(MIN_PIXEL_SIZE, size - 1.0);
             font.setPixelSize(int(size));
             metrics = QFontMetricsF(font);
@@ -177,7 +189,7 @@ void InPlaceTranslationOverlay::paintEvent(QPaintEvent *) {
         // Shrinking alone cannot fit a translation much longer than its source: the card grows
         // towards the right edge instead, and only text past that is cut with an ellipsis.
         const double available = qMax(24.0, right_edge - box.left() - 4);
-        const double needed = metrics.horizontalAdvance(line.text) + 2 * CARD_PADDING + 2;
+        const double needed = metrics.horizontalAdvance(text) + 2 * CARD_PADDING + 2;
         const double card_width = needed > box.width() ? qMin(needed, available) : box.width();
         const QRectF target(box.left(), box.top(), card_width, qMax(box.height(), metrics.height() + 4.0));
 
@@ -188,8 +200,8 @@ void InPlaceTranslationOverlay::paintEvent(QPaintEvent *) {
         painter.setFont(font);
         const QRectF text_rect = target.adjusted(CARD_PADDING, 0, -CARD_PADDING, 0);
         const QString shown =
-            metrics.horizontalAdvance(line.text) > text_rect.width() ? metrics.elidedText(line.text, Qt::ElideRight, int(text_rect.width())) : line.text;
-        painter.drawText(text_rect, Qt::AlignVCenter | Qt::AlignLeft | Qt::TextSingleLine | Qt::TextDontShowMnemonic, shown);
+            metrics.horizontalAdvance(text) > text_rect.width() ? metrics.elidedText(text, Qt::ElideRight, int(text_rect.width())) : text;
+        painter.drawText(text_rect, Qt::AlignVCenter | Qt::AlignLeft | Qt::TextSingleLine, shown);
     }
 }
 
