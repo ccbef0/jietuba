@@ -75,6 +75,13 @@ public:
     void enable_smart_selection(const QString &mode);
     bool prepare_initial_selection();
     QRectF get_smart_selection_rect(const QPointF &scene_pos);
+    // F1 long-press box: arm the selection drag at the current cursor without a mouse
+    // press; mouseMoveEvent then tracks the pointer until end_f1_box confirms it.
+    // cancel_f1_box backs out of the whole gesture, including the smart snap.
+    void begin_f1_box();
+    bool is_f1_box_active() const { return selection_drag->active; }
+    void end_f1_box();
+    void cancel_f1_box();
     // Late answers re-evaluate the hover under the cursor.
     void use_element_finder(std::unique_ptr<MSAAElementFinder> finder);
     void apply_smart_selection_rect(const QRectF &rect, bool animate);

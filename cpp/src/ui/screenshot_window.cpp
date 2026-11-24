@@ -12,6 +12,7 @@
 #include "capture/capture_service.h"
 #include "capture/system_cursor.h"
 #include "core/i18n.h"
+#include "core/input_hub.h"
 #include "core/last_capture_region.h"
 #include "core/logger.h"
 #include "core/platform_utils.h"
@@ -48,6 +49,10 @@
 #include <QScreen>
 #include <QTimer>
 #include <QWindow>
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
 
 namespace jietuba {
 namespace {
@@ -133,19 +138,12 @@ bool ScreenshotShortcutHandler::handle_key(QInputEvent *event) {
         else w->cleanup_and_close();
         return true;
     }
-    // F1: toggle quick-annotate mode or confirm (copy to clipboard).
-    if (key == Qt::Key_F1 && event->modifiers() == Qt::NoModifier) {
-        if (w->scene && w->scene->selection_model->is_confirmed()) {
-            if (w->quick_annotate_mode_) {
-                // Already annotating: F1 confirms and copies.
-                if (!event_is_auto_repeat(event)) w->action_handler->handle_confirm();
-                return true;
-            } else {
-                // Selection done: F1 enters quick-annotate mode.
-                if (!event_is_auto_repeat(event)) w->enter_quick_annotate();
-                return true;
-            }
-        }
+    // F1: quick-annotate toggle, copy, or (before the selection) the long-press box.
+    // When F1 is the registered capture hotkey the key never reaches Qt and the input
+    // hub drives f1_edge instead; the press/release edges deduplicate between the two.
+    if (key == Qt::Key_F1 && event->modifiers() == Qt::NoModifier && event->type() == QEvent::KeyPress) {
+        w->f1_edge(true);
+        return true;
     }
     // In quick-annotate mode, printable characters create red text at max contrast.
     if (w->quick_annotate_mode_ && !is_text_editing && event->type() == QEvent::KeyPress) {
@@ -370,6 +368,7 @@ void ScreenshotWindow::begin_session_ui() {
     shortcut_handler_ = std::make_unique<ScreenshotShortcutHandler>(this);
     ShortcutManager::instance()->register_handler(shortcut_handler_.get());
     session_active_ = true;
+    watch_f1(true);
     initial_selection_gate_ = new InitialSelectionGate(this);
     connect(initial_selection_gate_, &InitialSelectionGate::ready, this, &ScreenshotWindow::show_prepared_session);
     initial_selection_gate_->start(view);
@@ -426,6 +425,7 @@ void ScreenshotWindow::teardown_session() {
     if (!session_active_) return;
     session_active_ = false;
     is_closing = true;
+    watch_f1(false);
     if (initial_selection_gate_) initial_selection_gate_->cancel();
     hide();
     // A handed-over capture has told the hub already.
@@ -944,6 +944,80 @@ void ScreenshotWindow::place_text_at_max_contrast(const QString &text) {
     auto *item = new TextItem(text, QPointF(pos), font, QColor(255, 0, 0), true, false);
     scene->addItem(item);
     scene->undo_stack->push(new AddItemCommand(scene, ItemReference(item)));
+}
+
+namespace {
+constexpr const char *F1_WATCHER = "screenshot_f1";
+// A shorter hold than this is a tap: it must not draw a box.
+constexpr qint64 F1_LONG_PRESS_MS = 350;
+// A press that started before the window existed spent part of its hold on the capture;
+// the visible remainder is judged more leniently.
+constexpr qint64 F1_LAUNCH_HOLD_MS = 150;
+}
+
+void ScreenshotWindow::watch_f1(bool on) {
+    if (on == f1_hub_watched_) return;
+    auto *hub = on ? input_hub() : existing_input_hub();
+    if (on && (!hub || !hub->native)) return;
+    f1_hub_watched_ = on;
+    disconnect(f1_key_connection_);
+    if (!on) {
+        if (hub) hub->native->unwatch_keys(F1_WATCHER);
+        return;
+    }
+    // RegisterHotKey swallows both edges of the capture key before the window sees them,
+    // so the low-level hooks are the only place a held F1 and its release both arrive.
+    f1_key_connection_ = connect(hub, &InputHub::key, this,
+                                 [this](const QString &watcher, int vk, bool pressed) {
+                                     if (watcher == F1_WATCHER && vk == VK_F1) f1_edge(pressed);
+                                 },
+                                 Qt::QueuedConnection);
+    hub->native->watch_keys(F1_WATCHER, {quint32(VK_F1)});
+    // The press that opened this window may still be held down: the box gesture is already underway.
+    if (GetAsyncKeyState(VK_F1) & 0x8000) f1_edge(true, true);
+    // A release landing between the state read and the watch leaves no edge behind;
+    // re-check the live key state shortly after and close the edge ourselves.
+    QTimer::singleShot(100, this, [this] {
+        if (f1_phys_down_ && !(GetAsyncKeyState(VK_F1) & 0x8000)) f1_edge(false);
+    });
+}
+
+// One physical press/release of F1 per edge: auto-repeats return at the down guard,
+// and the Qt KeyPress path and the hub path deduplicate through f1_phys_down_.
+void ScreenshotWindow::f1_edge(bool pressed, bool from_launch) {
+    // The hub sees every system key; only the capture session itself reacts to F1,
+    // and a dialog in front of it keeps the keyboard like the Qt chain does.
+    if (is_closing || !session_active_ || blocking_modal(this)) return;
+    if (pressed) {
+        if (f1_phys_down_) return;
+        f1_phys_down_ = true;
+        // Without the hub there are no release events; collapse the press into a tap so
+        // the toggles still work and a box can never stick.
+        if (!f1_hub_watched_) QTimer::singleShot(0, this, [this] { f1_edge(false); });
+        if (!scene) return;
+        if (scene->selection_model->is_confirmed()) {
+            if (quick_annotate_mode_) action_handler->handle_confirm();
+            else enter_quick_annotate();
+            return;
+        }
+        if (is_text_editing() || !view || view->is_f1_box_active()) return;
+        f1_box_active_ = true;
+        f1_box_launch_ = from_launch;
+        f1_hold_timer_.start();
+        view->begin_f1_box();
+    } else {
+        if (!f1_phys_down_) return;
+        f1_phys_down_ = false;
+        if (!f1_box_active_) return;
+        f1_box_active_ = false;
+        const qint64 threshold = f1_box_launch_ ? F1_LAUNCH_HOLD_MS : F1_LONG_PRESS_MS;
+        const bool long_hold = f1_hold_timer_.elapsed() >= threshold;
+        f1_box_launch_ = false;
+        if (!view) return;
+        // Long press: release ends the box and confirms it; a tap backs the snap out.
+        if (long_hold && view->is_f1_box_active()) view->end_f1_box();
+        else if (view->is_f1_box_active()) view->cancel_f1_box();
+    }
 }
 
 }

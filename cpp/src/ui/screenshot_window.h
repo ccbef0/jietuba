@@ -3,6 +3,7 @@
 #include "core/shortcut_manager.h"
 #include "tools/action.h"
 #include "ui/selection_info/controller.h"
+#include <QElapsedTimer>
 #include <QImage>
 #include <QPointer>
 #include <QRectF>
@@ -128,6 +129,8 @@ protected:
     void closeEvent(QCloseEvent *event) override;
 
 private:
+    // The shortcut chain enters quick-annotate and the F1 box through these.
+    friend class ScreenshotShortcutHandler;
     CanvasView *create_canvas_view(CanvasScene *scene);
     bool has_capture_mouse_gesture(const QString &gesture) const;
     // Old configuration objects without the mode setting fall back to window level, the default.
@@ -169,9 +172,22 @@ private:
     void enter_quick_annotate();
     void exit_quick_annotate();
     void place_text_at_max_contrast(const QString &text);
+    // F1 long-press box: hold F1 to start a selection at the mouse position and
+    // the box follows the pointer; releasing F1 ends it. A quick tap draws nothing.
+    // Tracked through the input hub because RegisterHotKey eats the window's own F1 keys.
+    // from_launch marks the press that opened this window while still held down: the box
+    // gesture is already underway, so its release ends the box however brief the visible hold.
+    void f1_edge(bool pressed, bool from_launch = false);
+    void watch_f1(bool on);
 
     bool session_active_ = false;
     bool quick_annotate_mode_ = false;
+    bool f1_phys_down_ = false;
+    bool f1_box_active_ = false;
+    bool f1_box_launch_ = false;
+    bool f1_hub_watched_ = false;
+    QElapsedTimer f1_hold_timer_;
+    QMetaObject::Connection f1_key_connection_;
     // Set by hand_over; deleted with the scene.
     QObject *handover_ = nullptr;
     bool fullscreen_crosshair_ = false;

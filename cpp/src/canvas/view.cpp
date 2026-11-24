@@ -373,6 +373,25 @@ bool CanvasView::prepare_initial_selection() {
     return !hit || element_finder->prepare_at(hit->hwnd, point.x(), point.y());
 }
 
+void CanvasView::begin_f1_box() {
+    if (is_closed_ || !canvas_scene || canvas_scene->selection_model->is_confirmed()) return;
+    selection_drag->begin(mapToScene(mapFromGlobal(QCursor::pos())));
+}
+
+void CanvasView::end_f1_box() {
+    if (is_closed_ || !canvas_scene || !selection_drag->active) return;
+    selection_drag->end();
+}
+
+void CanvasView::cancel_f1_box() {
+    if (is_closed_ || !canvas_scene || !selection_drag->active) return;
+    selection_drag->active = false;
+    selection_drag->dragging = false;
+    canvas_scene->selection_model->stop_dragging();
+    // begin() may have snapped to the window under the cursor; drop that too.
+    canvas_scene->selection_model->deactivate();
+}
+
 QRectF CanvasView::get_smart_selection_rect(const QPointF &scene_pos) {
     // Not cached: set_rect short-circuits identical rects and hit testing is cheap.
     if (!smart_selection_enabled || !window_finder) return {};
