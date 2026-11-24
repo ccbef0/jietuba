@@ -771,14 +771,16 @@ void CanvasView::mousePressEvent(QMouseEvent *event) {
         return;
     }
     // Quick-annotate mode: left-drag draws an arrow, right-drag draws a rectangle.
+    // The drawing tools only start on Qt::LeftButton, so the stroke is begun with
+    // left semantics whichever physical button is down; move/release are button-free.
     if (auto *host = canvas_host_of(this); host && host->is_quick_annotate_mode()) {
         if (event->button() == Qt::LeftButton) {
             canvas_scene->activate_tool("arrow");
-            drawing->begin(scene_pos, event->button());
+            drawing->begin(scene_pos, Qt::LeftButton);
             return;
         } else if (event->button() == Qt::RightButton) {
             canvas_scene->activate_tool("rect");
-            drawing->begin(scene_pos, event->button());
+            drawing->begin(scene_pos, Qt::LeftButton);
             return;
         }
     }
