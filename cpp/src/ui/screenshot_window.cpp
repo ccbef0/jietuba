@@ -142,7 +142,9 @@ bool ScreenshotShortcutHandler::handle_key(QInputEvent *event) {
     // When F1 is the registered capture hotkey the key never reaches Qt and the input
     // hub drives f1_edge instead; the press/release edges deduplicate between the two.
     if (key == Qt::Key_F1 && event->modifiers() == Qt::NoModifier && event->type() == QEvent::KeyPress) {
-        w->f1_edge(true);
+        // Repeats must not re-toggle when the hub is unavailable (f1_edge synthesizes the release
+        // right away there); with the hub the press-edge guard already absorbs them.
+        if (!event_is_auto_repeat(event)) w->f1_edge(true);
         return true;
     }
     // In quick-annotate mode, printable characters create red text at max contrast.
