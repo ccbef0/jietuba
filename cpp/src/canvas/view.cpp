@@ -724,6 +724,8 @@ bool CanvasView::route_capture_right_button(QMouseEvent *event, bool dispatch) {
     if (event->button() != Qt::RightButton) return false;
     auto *host = canvas_host_of(this);
     if (!host || !host->has_capture_right_click_handler()) return false;
+    // In quick-annotate mode, right-drag draws rectangles instead.
+    if (host->is_quick_annotate_mode()) return false;
     event->accept();
     if (dispatch) host->handle_capture_right_click(event);
     return true;
@@ -748,6 +750,18 @@ void CanvasView::mousePressEvent(QMouseEvent *event) {
     if (!canvas_scene->selection_model->is_confirmed()) {
         selection_drag->begin(scene_pos);
         return;
+    }
+    // Quick-annotate mode: left-drag draws an arrow, right-drag draws a rectangle.
+    if (auto *host = canvas_host_of(this); host && host->is_quick_annotate_mode()) {
+        if (event->button() == Qt::LeftButton) {
+            canvas_scene->activate_tool("arrow");
+            drawing->begin(scene_pos, event->button());
+            return;
+        } else if (event->button() == Qt::RightButton) {
+            canvas_scene->activate_tool("rect");
+            drawing->begin(scene_pos, event->button());
+            return;
+        }
     }
     // Snapshot the reversible state before routing; it only becomes a double-click
     // candidate once the text and handle branches have passed.

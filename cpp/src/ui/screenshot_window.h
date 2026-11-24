@@ -93,6 +93,8 @@ public:
     bool has_confirm_handler() const override { return true; }
     void handle_confirm() override;
     CanvasView *canvas_view() const override { return view; }
+    // Quick-annotate mode: F1 toggles it on after selection; left=arrow, right=rect, type=text.
+    bool is_quick_annotate_mode() const override { return quick_annotate_mode_; }
 
     // SelectionInfoHost
     bool selection_info_closing() const override { return is_closing; }
@@ -164,8 +166,12 @@ private:
     QVariantMap capture_arrow_state(QGraphicsItem *item) const;
     void on_undo();
     void on_redo();
+    void enter_quick_annotate();
+    void exit_quick_annotate();
+    void place_text_at_max_contrast(const QString &text);
 
     bool session_active_ = false;
+    bool quick_annotate_mode_ = false;
     // Set by hand_over; deleted with the scene.
     QObject *handover_ = nullptr;
     bool fullscreen_crosshair_ = false;

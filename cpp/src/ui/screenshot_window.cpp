@@ -1,6 +1,9 @@
 #include "ui/screenshot_window.h"
+#include "annotation/quick_annotate.h"
 #include "canvas/items/arrow_item.h"
 #include "canvas/items/background_item.h"
+#include "canvas/items/item_reference.h"
+#include "canvas/items/text_item.h"
 #include "canvas/scene.h"
 #include "canvas/selection_model.h"
 #include "canvas/smart_edit_controller.h"
@@ -126,8 +129,33 @@ bool ScreenshotShortcutHandler::handle_key(QInputEvent *event) {
     if (key == Qt::Key_Escape) {
         auto *text_item = is_text_editing && w->view ? w->view->get_active_text_item() : nullptr;
         if (text_item) w->view->end_text_edit(text_item);
+        else if (w->quick_annotate_mode_) { w->exit_quick_annotate(); return true; }
         else w->cleanup_and_close();
         return true;
+    }
+    // F1: toggle quick-annotate mode or confirm (copy to clipboard).
+    if (key == Qt::Key_F1 && event->modifiers() == Qt::NoModifier) {
+        if (w->scene && w->scene->selection_model->is_confirmed()) {
+            if (w->quick_annotate_mode_) {
+                // Already annotating: F1 confirms and copies.
+                if (!event_is_auto_repeat(event)) w->action_handler->handle_confirm();
+                return true;
+            } else {
+                // Selection done: F1 enters quick-annotate mode.
+                if (!event_is_auto_repeat(event)) w->enter_quick_annotate();
+                return true;
+            }
+        }
+    }
+    // In quick-annotate mode, printable characters create red text at max contrast.
+    if (w->quick_annotate_mode_ && !is_text_editing && event->type() == QEvent::KeyPress) {
+        auto *key_ev = static_cast<QKeyEvent *>(event);
+        const QString text = key_ev->text();
+        if (!text.isEmpty() && text[0].isPrint() && !(key_ev->modifiers() & Qt::ControlModifier) &&
+            !(key_ev->modifiers() & Qt::AltModifier)) {
+            w->place_text_at_max_contrast(text);
+            return true;
+        }
     }
     if (match(event, "inapp_restore_last_region") && restore_last_region()) return true;
     if (match(event, "inapp_confirm")) {
@@ -863,4 +891,59 @@ void ScreenshotWindow::closeEvent(QCloseEvent *event) {
     if (!is_closing) cleanup_and_close();
     QWidget::closeEvent(event);
 }
+
+void ScreenshotWindow::enter_quick_annotate() {
+    quick_annotate_mode_ = true;
+    // Hide the toolbar to keep the interface clean; the user works with mouse buttons directly.
+    if (toolbar) toolbar->hide();
+    // Set cursor to crosshair for precision.
+    if (view) view->setCursor(Qt::CrossCursor);
+}
+
+void ScreenshotWindow::exit_quick_annotate() {
+    quick_annotate_mode_ = false;
+    // Restore the toolbar.
+    if (toolbar && scene && scene->selection_model->is_confirmed()) {
+        toolbar->show();
+        toolbar->raise();
+        update_toolbar_position();
+    }
+    if (view) view->setCursor(Qt::ArrowCursor);
+}
+
+void ScreenshotWindow::place_text_at_max_contrast(const QString &text) {
+    if (!scene || !view || text.isEmpty()) return;
+    const QRectF sel_rect_f = scene->selection_model->rect();
+    if (sel_rect_f.isNull() || sel_rect_f.isEmpty()) return;
+    const QRect sel_rect = sel_rect_f.toRect();
+
+    // Estimate text size: bold 18px font, ~12px per character width.
+    const QSize text_size(text.length() * 12 + 24, 30);
+
+    // Collect avoid points: endpoints of existing arrow items in the scene.
+    std::vector<QPoint> avoid_points;
+    for (auto *item : scene->items(sel_rect_f)) {
+        if (auto *arrow = dynamic_cast<ArrowItem *>(item)) {
+            auto path = arrow->path();
+            if (path.elementCount() >= 2) {
+                avoid_points.emplace_back(static_cast<int>(path.elementAt(0).x),
+                                          static_cast<int>(path.elementAt(0).y));
+                auto last = path.elementAt(path.elementCount() - 1);
+                avoid_points.emplace_back(static_cast<int>(last.x), static_cast<int>(last.y));
+            }
+        }
+    }
+
+    // Find the best position using the captured image.
+    QPoint pos = find_max_contrast_position(original_image, sel_rect, text_size, avoid_points);
+
+    // Create a TextItem with red color, bold, 18px.
+    QFont font;
+    font.setPixelSize(18);
+    font.setBold(true);
+    auto *item = new TextItem(text, QPointF(pos), font, QColor(255, 0, 0), true, false);
+    scene->addItem(item);
+    scene->undo_stack->push(new AddItemCommand(scene, ItemReference(item)));
+}
+
 }

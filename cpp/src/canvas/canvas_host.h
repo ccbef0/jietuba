@@ -31,6 +31,9 @@ public:
     // window._handle_confirm
     virtual bool has_confirm_handler() const { return false; }
     virtual void handle_confirm() {}
+    // Quick-annotate mode: left-drag draws arrows, right-drag draws rectangles,
+    // typing places red text at the point of maximum contrast.
+    virtual bool is_quick_annotate_mode() const { return false; }
     // window.view
     virtual CanvasView *canvas_view() const { return nullptr; }
     // window.update_toolbar_position; absent means nothing to do.
