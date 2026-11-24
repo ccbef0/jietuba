@@ -105,6 +105,17 @@ class ClipboardWindowTests : public QObject {
         QTest::mouseClick(window_->list_widget->viewport(), button, modifiers, row_center(item_id));
     }
 
+    // Ctrl + left drag between two viewport points: the band that marks every row it covers.
+    void band(const QPoint &from, const QPoint &to) {
+        auto *viewport = window_->list_widget->viewport();
+        QTest::mousePress(viewport, Qt::LeftButton, Qt::ControlModifier, from);
+        QMouseEvent move(QEvent::MouseMove, QPointF(to), QPointF(viewport->mapToGlobal(to)), Qt::NoButton, Qt::LeftButton, Qt::ControlModifier);
+        QApplication::sendEvent(viewport, &move);
+        QTest::mouseRelease(viewport, Qt::LeftButton, Qt::ControlModifier, to);
+    }
+
+    QRect row_rect(qint64 item_id) const { return window_->list_widget->visualItemRect(window_->list_widget->item(row_of(item_id))); }
+
     bool key(int key, Qt::KeyboardModifiers modifiers = Qt::NoModifier) {
         ClipboardShortcutHandler handler(window_.get());
         QKeyEvent event(QEvent::KeyPress, key, modifiers);
@@ -419,6 +430,36 @@ private slots:
         QCOMPARE(recorded->dragged.size(), 2);
         QVERIFY(env_.pastes.isEmpty());
         env_.config->set_app_setting("mouse_clipboard_quick_edit", "");
+    }
+
+    void aBandMarksEveryRowItCovers() {
+        // Newest first: the rows are d, c, b, a.
+        const auto ids = add_texts({"a", "b", "c", "d"});
+        auto *window = open_window();
+        auto *selection = window->selection_manager;
+        band(row_rect(ids[3]).topLeft() + QPoint(4, 4), row_rect(ids[1]).bottomRight() + QPoint(4, 4));
+        // Everything the band touched is marked, in list order, and nothing else is.
+        QCOMPARE(selection->marked_ids(), (QList<qint64>{ids[3], ids[2], ids[1]}));
+        QVERIFY(window->selection_bar->isVisible());
+        // A second band adds to the marks instead of trading places with them.
+        band(row_rect(ids[0]).topLeft() + QPoint(4, 4), row_rect(ids[0]).bottomRight() + QPoint(4, 4));
+        QCOMPARE(selection->marked_ids(), (QList<qint64>{ids[3], ids[2], ids[1], ids[0]}));
+    }
+
+    void theBandStartsInBlankSpaceAndACtrlClickStillMarksOneRow() {
+        const auto ids = add_texts({"a", "b", "c", "d"});
+        auto *window = open_window();
+        auto *selection = window->selection_manager;
+        auto *list = window->list_widget;
+        // Below the last row there is nothing to point at, but a drag from there still selects.
+        const QPoint blank(row_center(ids[0]).x(), list->viewport()->height() - 4);
+        QVERIFY(!list->itemAt(blank));
+        band(blank, row_center(ids[1]));
+        QCOMPARE(selection->marked_ids(), (QList<qint64>{ids[1], ids[0]}));
+        selection->clear_marks();
+        // A Ctrl press that never moved is still the single toggle it was.
+        click(ids[2], Qt::LeftButton, Qt::ControlModifier);
+        QCOMPARE(selection->marked_ids(), QList<qint64>{ids[2]});
     }
 
     void aMarkStartsTheMultipleSelectionWhereClicksSelect() {

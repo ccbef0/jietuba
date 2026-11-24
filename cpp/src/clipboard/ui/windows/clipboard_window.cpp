@@ -37,6 +37,7 @@
 #include <QPainter>
 #include <QMouseEvent>
 #include <QProcess>
+#include <QRubberBand>
 #include <QSaveFile>
 #include <QScreen>
 #include <QScrollBar>
@@ -1671,14 +1672,24 @@ ClipboardMouseController::ClipboardMouseController(ClipboardWindow *window)
     window->installEventFilter(this);
     list_widget_->installEventFilter(this);
     viewport_->installEventFilter(this);
-    connect(list_widget_->verticalScrollBar(), &QScrollBar::valueChanged, this, [this] { cancel(); });
+    // The band's own auto-scroll must not end the band it is scrolling.
+    connect(list_widget_->verticalScrollBar(), &QScrollBar::valueChanged, this, [this] {
+        if (marquee_ && marquee_->dragging) return;
+        cancel();
+    });
     connect(list_widget_->model(), &QAbstractItemModel::modelReset, this, [this] { cancel(); });
+    marquee_scroll_.setTimerType(Qt::PreciseTimer);
+    connect(&marquee_scroll_, &QTimer::timeout, this, [this] { scroll_marquee_tick(); });
 }
 
 void ClipboardMouseController::cancel() {
     timer_.stop();
     pending_.reset();
     pressed_.reset();
+    if (!marquee_) return;
+    marquee_scroll_.stop();
+    if (rubber_) rubber_->hide();
+    marquee_.reset();
 }
 
 bool ClipboardMouseController::available(const QString &action, qint64 item_id) const {
@@ -1720,6 +1731,54 @@ void ClipboardMouseController::select_by_click(Qt::MouseButton button, Qt::Keybo
     else selection->toggle_mark(item_id);
 }
 
+void ClipboardMouseController::arm_marquee(QEvent::Type kind, Qt::MouseButton button, Qt::KeyboardModifiers modifiers, const QPoint &viewport_pos, const QPoint &global_pos) {
+    // Ctrl+left is the one press with no drag of its own, so the movement after it is free to be a band.
+    if (kind != QEvent::MouseButtonPress || button != Qt::LeftButton || modifiers != Qt::ControlModifier) return;
+    marquee_ = Marquee{viewport_pos, viewport_pos, global_pos, false};
+}
+
+void ClipboardMouseController::update_marquee(const QPoint &viewport_pos, const QPoint &global_pos) {
+    Marquee &marquee = *marquee_;
+    marquee.end_pos = viewport_pos;
+    if (!marquee.dragging) {
+        // Until the pointer has moved as far as the system counts as a drag, this is still the
+        // Ctrl+click that marks one row, and it stays that way if the button comes up here.
+        if ((global_pos - marquee.global_press_pos).manhattanLength() < QApplication::startDragDistance()) return;
+        marquee.dragging = true;
+        pressed_.reset();
+        timer_.stop();
+        pending_.reset();
+        if (!rubber_) rubber_ = new QRubberBand(QRubberBand::Rectangle, viewport_);
+        rubber_->show();
+        marquee_scroll_.start(16);
+    }
+    rubber_->setGeometry(QRect(marquee.start_pos, viewport_pos).normalized());
+}
+
+void ClipboardMouseController::finish_marquee(const QPoint &viewport_pos) {
+    const Marquee marquee = *marquee_;
+    cancel();
+    const QRect band = QRect(marquee.start_pos, viewport_pos).normalized();
+    SelectionManager *selection = window_->selection_manager;
+    for (int row = 0; row < list_widget_->count(); ++row) {
+        const QRect rect = list_widget_->visualItemRect(list_widget_->item(row));
+        // Only a row on the screen has a rectangle to compare against: the band reaches further by
+        // scrolling, not by guessing where a row that is not drawn would be.
+        if (rect.isNull() || !band.intersects(rect)) continue;
+        selection->mark(list_widget_->item(row)->data(Qt::UserRole).toLongLong());
+    }
+}
+
+// Held near an edge, the band keeps growing as the list moves under it, so a history longer than the
+// window is still one drag.
+void ClipboardMouseController::scroll_marquee_tick() {
+    if (!marquee_ || !marquee_->dragging) return;
+    const int edge = scaled(24);
+    QScrollBar *bar = list_widget_->verticalScrollBar();
+    if (marquee_->end_pos.y() < edge) bar->setValue(bar->value() - 6);
+    else if (marquee_->end_pos.y() > viewport_->height() - edge) bar->setValue(bar->value() + 6);
+}
+
 void ClipboardMouseController::finish_click() {
     const auto pending = pending_;
     cancel();
@@ -1737,6 +1796,12 @@ bool ClipboardMouseController::eventFilter(QObject *obj, QEvent *event) {
     if (obj != viewport_) return false;
     if (kind == QEvent::MouseMove) {
         const auto *mouse = static_cast<QMouseEvent *>(event);
+        // A press holds the events here even once the pointer has left the list, so the band follows
+        // it out and the release that ends it still arrives.
+        if (marquee_ && (mouse->buttons() & Qt::LeftButton)) {
+            update_marquee(mouse->position().toPoint(), mouse->globalPosition().toPoint());
+            return true;
+        }
         if (pressed_ && (mouse->globalPosition().toPoint() - pressed_->global_pos).manhattanLength() >= QApplication::startDragDistance()) {
             const Pressed pressed = *pressed_;
             cancel();
@@ -1762,10 +1827,19 @@ bool ClipboardMouseController::eventFilter(QObject *obj, QEvent *event) {
     const std::optional<qint64> item_id = row ? std::optional<qint64>(row->data(Qt::UserRole).toLongLong()) : std::nullopt;
     const auto modifiers = mouse->modifiers();
     const QPoint position = mouse->position().toPoint();
+    if (kind == QEvent::MouseButtonRelease && marquee_ && marquee_->dragging) {
+        finish_marquee(position);
+        return true;
+    }
     if (kind == QEvent::MouseButtonPress || kind == QEvent::MouseButtonDblClick) {
         const auto pending = pending_;
         cancel();
-        if (!item_id) return true;
+        if (!item_id) {
+            // The band may start in the blank below the last row, where there is nothing to point at:
+            // a press there still does nothing on its own, only a drag from it selects.
+            arm_marquee(kind, button, modifiers, position, mouse->globalPosition().toPoint());
+            return true;
+        }
         // The press points at the row; a plain left press also starts the next Shift range there.
         window_->selection_manager->point_at(list_widget_->row(row));
         if (button == Qt::LeftButton && !marking(mouse, gesture, *item_id)) window_->selection_manager->set_anchor(*item_id);
@@ -1778,9 +1852,12 @@ bool ClipboardMouseController::eventFilter(QObject *obj, QEvent *event) {
             }
         }
         pressed_ = Pressed{*item_id, button, modifiers, mouse->globalPosition().toPoint()};
+        arm_marquee(kind, button, modifiers, position, mouse->globalPosition().toPoint());
     } else if (pressed_) {
         const Pressed pressed = *pressed_;
         pressed_.reset();
+        // A Ctrl press that never moved is only the click it always was: one row toggled.
+        marquee_.reset();
         if (item_id && pressed.item_id == *item_id && pressed.button == button && pressed.modifiers == modifiers &&
             (mouse->globalPosition().toPoint() - pressed.global_pos).manhattanLength() < QApplication::startDragDistance()) {
             if (window_->selection_manager->has_marks()) {

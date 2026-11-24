@@ -30,6 +30,8 @@ class LineEdit;
 class ToolSettingsManager;
 }
 
+class QRubberBand;
+
 namespace jietuba::clipboard {
 class ClipboardItemDelegate;
 class ClipboardMouseController;
@@ -314,6 +316,15 @@ private:
         Qt::MouseButton button;
         Qt::KeyboardModifiers modifiers;
     };
+    // A Ctrl+left press waiting to become a band, and the band once it has. Both corners are in
+    // viewport coordinates, so the rows move under a band that is being scrolled and stay put when
+    // the pointer stops.
+    struct Marquee {
+        QPoint start_pos;
+        QPoint end_pos;
+        QPoint global_press_pos;
+        bool dragging = false;
+    };
     bool available(const QString &action, qint64 item_id) const;
     QString match(QInputEvent *event, const QString &gesture, qint64 item_id) const;
     // Ctrl+left / Shift+left without a bound action mark items.
@@ -322,6 +333,11 @@ private:
     void finish_click();
     // A click while anything is marked: the left button adds the row (Shift a range, Ctrl toggles), the right removes it.
     void select_by_click(Qt::MouseButton button, Qt::KeyboardModifiers modifiers, qint64 item_id);
+    // Ctrl+left is the one press with no drag of its own, so it may still turn into a band.
+    void arm_marquee(QEvent::Type kind, Qt::MouseButton button, Qt::KeyboardModifiers modifiers, const QPoint &viewport_pos, const QPoint &global_pos);
+    void update_marquee(const QPoint &viewport_pos, const QPoint &global_pos);
+    void finish_marquee(const QPoint &viewport_pos);
+    void scroll_marquee_tick();
 
     ClipboardWindow *window_;
     QListWidget *list_widget_;
@@ -329,6 +345,9 @@ private:
     std::optional<Pressed> pressed_;
     std::optional<Pending> pending_;
     QTimer timer_;
+    std::optional<Marquee> marquee_;
+    QRubberBand *rubber_ = nullptr;
+    QTimer marquee_scroll_;
 };
 }
 
