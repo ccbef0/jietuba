@@ -161,6 +161,11 @@ private:
     bool capture_pending_ = false;
     // The pending capture is for recording.
     bool record_pending_ = false;
+    // WM_HOTKEY auto-repeats fire continuously while the capture key is held. A copy that ends
+    // the session mid-hold must not let the next repeat open a fresh capture, so the hotkey
+    // callback and the session end are stamped and compared in request_screenshot.
+    qint64 hotkey_screenshot_ms_ = 0;
+    qint64 capture_session_end_ms_ = 0;
     QPointer<ScreenshotCountdown> screenshot_countdown_;
     DisplayChangeWatcher *display_watcher_ = nullptr;
     std::unique_ptr<PreloadManager> preloader_;

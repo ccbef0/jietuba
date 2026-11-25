@@ -960,7 +960,10 @@ constexpr qint64 F1_LAUNCH_HOLD_MS = 150;
 void ScreenshotWindow::watch_f1(bool on) {
     if (on == f1_hub_watched_) return;
     auto *hub = on ? input_hub() : existing_input_hub();
-    if (on && (!hub || !hub->native)) return;
+    if (on && (!hub || !hub->native)) {
+        log_warning(T("[F1] 输入钩子不可用，长按画框退化为点按"), "ScreenshotWindow");
+        return;
+    }
     f1_hub_watched_ = on;
     disconnect(f1_key_connection_);
     if (!on) {
@@ -976,7 +979,9 @@ void ScreenshotWindow::watch_f1(bool on) {
                                  Qt::QueuedConnection);
     hub->native->watch_keys(F1_WATCHER, {quint32(VK_F1)});
     // The press that opened this window may still be held down: the box gesture is already underway.
-    if (GetAsyncKeyState(VK_F1) & 0x8000) f1_edge(true, true);
+    const bool launch_held = (GetAsyncKeyState(VK_F1) & 0x8000) != 0;
+    log_info(T("[F1] 会话监听已启动，窗口出现时按键{state}", {{"state", launch_held ? "仍被按住" : "已松开"}}), "ScreenshotWindow");
+    if (launch_held) f1_edge(true, true);
     // A release landing between the state read and the watch leaves no edge behind;
     // re-check the live key state shortly after and close the edge ourselves.
     QTimer::singleShot(100, this, [this] {
@@ -1007,6 +1012,7 @@ void ScreenshotWindow::f1_edge(bool pressed, bool from_launch) {
         f1_box_launch_ = from_launch;
         f1_hold_timer_.start();
         view->begin_f1_box();
+        log_info(T("[F1] 按下边沿：从鼠标位置开始画框{launch}", {{"launch", from_launch ? "（开窗长按）" : ""}}), "ScreenshotWindow");
     } else {
         if (!f1_phys_down_) return;
         f1_phys_down_ = false;
@@ -1014,6 +1020,9 @@ void ScreenshotWindow::f1_edge(bool pressed, bool from_launch) {
         f1_box_active_ = false;
         const qint64 threshold = f1_box_launch_ ? F1_LAUNCH_HOLD_MS : F1_LONG_PRESS_MS;
         const bool long_hold = f1_hold_timer_.elapsed() >= threshold;
+        log_info(T("[F1] 释放边沿：按住 {ms} ms，阈值 {th} ms → {act}",
+                   {{"ms", f1_hold_timer_.elapsed()}, {"th", threshold},
+                    {"act", long_hold ? "结束并确认画框" : "取消（视为点按）"}}), "ScreenshotWindow");
         f1_box_launch_ = false;
         if (!view) return;
         // Long press: release ends the box and confirms it; a tap backs the snap out.

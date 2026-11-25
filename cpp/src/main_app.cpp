@@ -42,6 +42,7 @@
 #include "ui/toast.h"
 #include "ui/tray_menu.h"
 #include <QCursor>
+#include <QDateTime>
 #include <QFile>
 #include <QGuiApplication>
 #include <QMenu>
@@ -271,7 +272,9 @@ void MainApp::update_hotkey(bool show_error) {
     hotkey_system->unregister_all();
     hotkey_system->set_suppressed(config_manager->get_global_hotkeys_disabled());
     std::vector<std::tuple<QString, QString, std::function<void()>>> functions = {
-        {"screenshot", tr_text("Screenshot"), [this] { start_screenshot(); }},
+        // Held-down repeats of the capture key keep firing while a copy closes the session;
+        // the stamp lets request_screenshot tell them apart from a deliberate new press.
+        {"screenshot", tr_text("Screenshot"), [this] { hotkey_screenshot_ms_ = QDateTime::currentMSecsSinceEpoch(); start_screenshot(); }},
         // A selection opens the compact popup, otherwise the input window.
         {"translation", tr_text("Translation"), smart_translation_controller->hotkey()},
     };
@@ -417,6 +420,17 @@ void MainApp::request_screenshot(bool delayed, bool record) {
     if (screenshot_window) {
         if (auto *leftover = blocking_modal(screenshot_window)) leftover->close();
     }
+    // WM_HOTKEY auto-repeats keep arriving while the key stays down. When a held F1 copies
+    // (quick-annotate confirm), the session ends mid-press and the next repeat would open a
+    // fresh capture, which reads as "F1 keeps restarting the screenshot". A hotkey request
+    // right after a session ended is that leftover repeat, not a new press.
+    {
+        const qint64 now = QDateTime::currentMSecsSinceEpoch();
+        if (now - hotkey_screenshot_ms_ < 100 && capture_session_end_ms_ && now - capture_session_end_ms_ < 900) {
+            log_info(T("热键长按连发：上一会话刚结束，忽略重复触发"), "MainApp");
+            return;
+        }
+    }
     // The annotation's drawings are captured; its hit layer and its focus are not.
     if (screen_annotation) screen_annotation->prepare_for_capture();
     // In-place translation cards stay on top of every window, so they would be captured into the
@@ -482,6 +496,9 @@ void MainApp::on_capture_ready(const QImage &image, const QRectF &rect, std::sha
     // After the capture global dragging resumes.
     connect(screenshot_window, &ScreenshotWindow::session_ended, quick_capture, &QuickCaptureController::sync_input_availability);
     connect(screenshot_window, &ScreenshotWindow::session_ended, this, &MainApp::release_clipboard_from_capture);
+    // Marks when the capture went away, so held-key repeats cannot open a new one right after.
+    connect(screenshot_window, &ScreenshotWindow::session_ended, this,
+            [this] { capture_session_end_ms_ = QDateTime::currentMSecsSinceEpoch(); });
     quick_capture->set_capture_pending(false);
 }
 
